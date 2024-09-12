@@ -5,8 +5,9 @@ import mimetypes
 import os
 import uuid
 from pathlib import Path
-from pprint import pformat, pprint
+from pprint import pformat
 from typing import Any, BinaryIO, Optional, Union
+from .logging_manager import RICH_CONSOLE
 
 import aiohttp
 from tqdm.asyncio import tqdm_asyncio
@@ -22,8 +23,6 @@ from .types import (
 from .util import ProgressFileReader, TqdmUpTo
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
-
 
 class BunkrrAPI:
     def __init__(
@@ -104,49 +103,64 @@ class BunkrrAPI:
 
         # Iterates all chunks
         while chunk_index < total_chunks:
-            # logger.debug(f"Processing chunk {chunk_index + 1}/{total_chunks} for {file_name}")
+            if (logging.DEBUG == logger.getEffectiveLevel()):
+                # neccesary to prevent line collision between TQDM progress bar and logger
+                # TODO: implement rich.progress
+                print() 
+            logger.debug(f"Processing chunk {chunk_index + 1}/{total_chunks} for {file_name}")
 
             chunk_data = file_data.read(self.chunk_size)
             chunk_upload_success = False
             chunk_upload_attempt = 0
-            if not chunk_data:
-                print("No more chunks to upload")
-                break  # Exit the loop if we've reached the end of the file
 
-            # likely using https://gitlab.com/meno/dropzone/-/wikis/faq#chunked-uploads
-            # https://github.com/Dodotree/DropzonePHPchunks/issues/3
-            data = aiohttp.FormData()
-            data.add_field("dzuuid", file_uuid)
-            data.add_field("dzchunkindex", str(chunk_index))
-            data.add_field("dztotalfilesize", str(file_size))
-            data.add_field("dzchunksize", str(self.chunk_size))
-            data.add_field("dztotalchunkcount", str(total_chunks))
-            data.add_field("dzchunkbyteoffset", str(dzchunkbyteoffset))
-            data.add_field(
-                "files[]",
-                chunk_data,
-                filename=file_name,
-                content_type="application/octet-stream",
-            )
+            if not chunk_data:
+                logger.debug("No more chunks to upload")
+                break  # Exit the loop if we've reached the end of the file
 
             # Retries chunks if they ever fail
             while chunk_upload_attempt < self.max_chunk_retries and chunk_upload_success is False:
                 try:
-                    async with session.post("/api/upload", data=data) as resp:
-                        response = await resp.json()
+                    # likely using https://gitlab.com/meno/dropzone/-/wikis/faq#chunked-uploads
+                    # https://github.com/Dodotree/DropzonePHPchunks/issues/3
+                    # FormData are one use only, so they need to be created every chunk retry
+                    data = aiohttp.FormData()
+                    data.add_field("dzuuid", file_uuid)
+                    data.add_field("dzchunkindex", str(chunk_index))
+                    data.add_field("dztotalfilesize", str(file_size))
+                    data.add_field("dzchunksize", str(self.chunk_size))
+                    data.add_field("dztotalchunkcount", str(total_chunks))
+                    data.add_field("dzchunkbyteoffset", str(dzchunkbyteoffset))
+                    data.add_field(
+                        "files[]",
+                        chunk_data,
+                        filename=file_name,
+                        content_type="application/octet-stream",
+                    )
+                    async with session.post("/api/upload", data = data) as resp:
+                        response = {}
+                        content_type = resp.headers.get('Content-Type', '')
+
+                        if 'application/json' in content_type:
+                            response =  await resp.json()
+                        else:
+                            logger.debug (f"server_response = {resp.text()}")
+                        
                         if response.get("success"):
                             chunk_index += 1
                             dzchunkbyteoffset += self.chunk_size
                             chunk_upload_success = True
                         else:
-                            msg = f"{file_uuid} failed uploading chunk #{chunk_index}/{total_chunks} to {server} [{chunk_upload_attempt}/{self.max_chunk_retries}]"
-                            logger.error(msg)
-                            raise Exception(msg)
+                            raise ValueError
+
                 except Exception:
+                    msg = f"{file_uuid} failed uploading chunk #{chunk_index+1}/{total_chunks} to {server} [{chunk_upload_attempt+1}/{self.max_chunk_retries}]"
+                    print()  # neccesary to prevent line collision between TQDM progress bar and logger
+                    logger.error(msg)
                     chunk_upload_attempt += 1
 
             if chunk_upload_success is False:
-                msg = f"Failed uploading chunks for {file_uuid} too many times times to {server}, cannot continue"
+                msg = f"Failed uploading chunks for {file_uuid} too many times to {server}, cannot continue"
+                print() # neccesary to prevent line collision between TQDM progress bar and logger
                 logger.error(msg)
                 raise Exception(msg)
 
@@ -174,6 +188,7 @@ class BunkrrAPI:
         server = "/".join(node_response["url"].split("/")[:3])
 
         if server not in self.server_sessions:
+            print()  # neccesary to prevent line collision between TQDM progress bar and logger
             logger.info(f"Using new server connection to {server}")
             self.server_sessions[server] = aiohttp.ClientSession(server, headers=self.session_headers)
 
@@ -194,6 +209,7 @@ class BunkrrAPI:
                             unit_divisor=1024,
                             miniters=1,
                             desc=f"{file.name} [{retries + 1}/{self.retries}]",
+                            file = RICH_CONSOLE.file
                         ) as t:
                             with ProgressFileReader(filename=file, read_callback=t.update_to) as file_data:
                                 if file_size <= self.chunk_size:
@@ -210,6 +226,8 @@ class BunkrrAPI:
 
                                         return response
                                 else:
+                                    if (logging.DEBUG == logger.getEffectiveLevel()):
+                                        print() # neccesary to prevent line collision between TQDM progress bar and logger
                                     logger.debug(f"{file.name} will use UUID {file_uuid}")
                                     await self.upload_chunks(
                                         file_data, file.name, file_uuid, file_size, session, server
@@ -230,10 +248,16 @@ class BunkrrAPI:
                                     finish_chunks_attempt = 0
                                     while True:
                                         try:
-                                            async with session.post(
-                                                "/api/upload/finishchunks", json=upload_data
-                                            ) as resp:
-                                                response = await resp.json()
+                                            async with session.post("/api/upload/finishchunks", json=upload_data) as resp:
+                                                response = {}
+                                                content_type = resp.headers.get('Content-Type', '')
+
+                                                if 'application/json' in content_type:
+                                                    response =  await resp.json()
+                                                else:
+                                                    if (logging.DEBUG == logger.getEffectiveLevel()):
+                                                        print() # neccesary to prevent line collision between TQDM progress bar and loggerlogger.debug (f"server_response = {resp.text()}")
+
                                                 if response.get("success") is False:
                                                     msg = f"{file_uuid} failed finishing chunks to {server} [{finish_chunks_attempt + 1}/{self.max_chunk_retries}]\n{pformat(response)}"
                                                     logger.error(msg)
@@ -246,16 +270,19 @@ class BunkrrAPI:
                                             if finish_chunks_attempt >= self.max_chunk_retries:
                                                 raise
                                     # TODO: Should probably return here
-                except Exception:
-                    logger.exception(f"Upload failed for {file.name} to {server} Attempt #{retries + 1}")
+                except Exception as e:
+                    logger.error(f"Upload failed for {file.name} to {server} Attempt #{retries + 1}")
+                    logger.exception(e)
                     retries += 1
+
             return {"success": False, "files": [{"name": file.name, "url": ""}]}
 
     # TODO: This should probably move out of API
     async def upload_files(self, paths: list[Path], folder_id: Optional[str] = None) -> list[UploadResponse]:
+        
         try:
             tasks = [self.upload(test_file, folder_id) for i, test_file in enumerate(paths)]
-            responses = await tqdm_asyncio.gather(*tasks, desc="Files uploaded")
+            responses = await tqdm_asyncio.gather(*tasks, desc="Files uploaded", delay = 1, file = RICH_CONSOLE.file)
             return responses
         finally:
             # This should happen in the API client itself
