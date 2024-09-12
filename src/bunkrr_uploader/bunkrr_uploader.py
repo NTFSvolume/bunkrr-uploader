@@ -1,20 +1,19 @@
 import asyncio
 import csv
-import functools
 import logging
 import os
 import re
 import time
+import tempfile
 from pathlib import Path
 from pprint import pformat, pprint
 from typing import Any, List, Optional
 
 from .api import BunkrrAPI
 from .cli import cli
+from .logging_manager import setup_logger, USE_MAIN_NAME
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.WARNING)
-
 
 class BunkrrUploader:
     def __init__(
@@ -43,7 +42,7 @@ class BunkrrUploader:
         # chunk_size = '1MB'
 
         if max_file_size == "0B" or chunk_size == "0B":
-            raise Exception("Invalid max file size or chunk size")
+            raise ValueError("Invalid max file size or chunk size")
 
         # TODO: check if either one is 0 and abort
 
@@ -66,7 +65,7 @@ class BunkrrUploader:
         self.api.chunk_size = units_calculated[1]
 
     def prepare_file_for_upload(self, file: Path) -> List[Path]:
-        file_size = os.stat(file).st_size
+        file_size = file.stat().st_size
 
         # TODO: Truncate the file name if it is too long
         file_name = (file.name[:240] + "..") if len(file.name) > 240 else file.name
@@ -86,18 +85,19 @@ class BunkrrUploader:
         if path.is_file():
             paths = [path]
         else:
-            paths = [x for x in path.iterdir() if x.is_file()]
+            logger.warning (F"'{path}' is a folder, only files at the root will be uploaded (no recursion)")
+            paths = sorted([x for x in path.iterdir() if x.is_file()])
             if folder is None:
                 folder = path.name
 
+        if len(paths) == 0:
+            logger.error("No file paths left to upload")
+            return
+        
         # The server may not accept certain file types and those over a certain size so we need to create temporary files
         filtered_paths = []
         for file_path in paths:
             filtered_paths.extend(self.prepare_file_for_upload(file_path))
-
-        if len(paths) == 0:
-            print("No file paths left to upload")
-            return
 
         # TODO: Delete the extra created files after upload
         self.temporary_files = [x for x in filtered_paths if x not in paths]
@@ -114,7 +114,6 @@ class BunkrrUploader:
 
         if paths:
             responses = await self.api.upload_files(filtered_paths, folder_id)
-            # pprint(responses)
 
             if self.options.get("save") is True and responses:
                 expected_fieldnames = ["albumid", "filePathMD5", "fileNameMD5", "filePath", "fileName", "uploadSuccess"]
@@ -131,9 +130,13 @@ class BunkrrUploader:
             else:
                 pprint(responses)
 
-
 async def async_main() -> None:
     args = cli()
+    setup_logger(
+        log_file = USE_MAIN_NAME,
+        log_level = logging.DEBUG if args.verbose else logging.INFO,
+        logs_folder_overrride = Path(__file__).parents[-3] / "logs")
+    
     logger.debug(args)
 
     options = {"save": args.save, "chunk_retries": args.chunk_retries}
@@ -142,7 +145,7 @@ async def async_main() -> None:
     try:
         await bunkrr_client.init()
         if args.dry_run:
-            print("Dry run only, uploading skipped")
+            logger.warning("Dry run only, uploading skipped")
         else:
             await bunkrr_client.upload_files(args.file, folder=args.folder)
     finally:
@@ -151,7 +154,6 @@ async def async_main() -> None:
         for server_session in bunkrr_client.api.server_sessions.values():
             if not server_session.closed:
                 server_session.close()
-
 
 def main():
     asyncio.run(async_main())
