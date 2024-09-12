@@ -7,7 +7,7 @@ def cli():
     parser = argparse.ArgumentParser(
         prog="bunkrr-upload", 
         description="Bunkrr Uploader supporting parallel uploads"
-        )
+    )
     
     parser.add_argument("file", 
         type=Path, 

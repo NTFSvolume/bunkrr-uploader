@@ -257,6 +257,7 @@ class BunkrrAPI:
                                                 else:
                                                     if (logging.DEBUG == logger.getEffectiveLevel()):
                                                         print() # neccesary to prevent line collision between TQDM progress bar and loggerlogger.debug (f"server_response = {resp.text()}")
+                                                    logger.debug (f"server_response = {resp.text()}")
 
                                                 if response.get("success") is False:
                                                     msg = f"{file_uuid} failed finishing chunks to {server} [{finish_chunks_attempt + 1}/{self.max_chunk_retries}]\n{pformat(response)}"
