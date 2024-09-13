@@ -4,47 +4,32 @@ from pathlib import Path
 
 
 def cli():
-    parser = argparse.ArgumentParser(
-        prog="bunkrr-upload", 
-        description="Bunkrr Uploader supporting parallel uploads"
-        )
-    
-    parser.add_argument("file", 
-        type=Path, 
-        metavar= "FILE|DIR",
-        help="File or directory to look for files in to upload"
-    )
+    parser = argparse.ArgumentParser(prog="bunkrr-upload", description="Bunkrr Uploader supporting parallel uploads")
+
+    parser.add_argument("file", type=Path, metavar="FILE|DIR", help="File or directory to look for files in to upload")
     parser.add_argument(
         "-t",
         "--token",
         type=str,
         default=os.getenv("BUNKRR_TOKEN"),
         help="""API token for your account so that you can upload to a specific account/folder.
-                You can also set the BUNKRR_TOKEN environment variable for this"""
+                You can also set the BUNKRR_TOKEN environment variable for this""",
     )
     parser.add_argument(
-        "-f", "--folder", 
-        metavar="ALBUM_NAME", 
-        type=str, 
+        "-f",
+        "--folder",
+        metavar="ALBUM_NAME",
+        type=str,
         help="""album where files will be uploaded to. Will be created if it does not already exist. 
-                If input is a DIR, defaults to DIR's name"""
+                If input is a DIR, defaults to DIR's name""",
     )
-    parser.add_argument(
-        "-d", "--dry-run",
-        action="store_true",
-        help="Don't create folders or upload files"
-    )
+    parser.add_argument("-d", "--dry-run", action="store_true", help="Don't create folders or upload files")
     parser.add_argument(
         "--max-chunk-size",
         action="store_true",
         help="Use the server's maximum chunk size instead of the default one",
     )
-    parser.add_argument("-c", 
-        "--connections",
-        type=int, 
-        default=2, 
-        help="Maximum parallel uploads to do at once"
-    )
+    parser.add_argument("-c", "--connections", type=int, default=2, help="Maximum parallel uploads to do at once")
     parser.add_argument(
         "--public",
         action=argparse.BooleanOptionalAction,
@@ -76,12 +61,7 @@ def cli():
         type=int,
         help="How many times to retry a failed chunk or chunk completion",
     )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show debug information"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show debug information")
     args = parser.parse_args()
 
     return args
