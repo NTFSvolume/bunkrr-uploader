@@ -9,8 +9,8 @@ from pprint import pformat
 from typing import Any, BinaryIO, Optional, Union
 
 import aiohttp
-from tqdm.asyncio import tqdm_asyncio
 from tqdm import tqdm
+from tqdm.asyncio import tqdm_asyncio
 
 from .types import (
     AlbumsResponse,
@@ -23,6 +23,7 @@ from .types import (
 from .util import ProgressFileReader, TqdmUpTo
 
 logger = logging.getLogger(__name__)
+
 
 class BunkrrAPI:
     def __init__(
@@ -133,16 +134,16 @@ class BunkrrAPI:
                         filename=file_name,
                         content_type="application/octet-stream",
                     )
-                    async with session.post("/api/upload", data = data) as resp:
+                    async with session.post("/api/upload", data=data) as resp:
                         response = {}
-                        content_type = resp.headers.get('Content-Type', '')
+                        content_type = resp.headers.get("Content-Type", "")
 
-                        if 'application/json' in content_type:
-                            response =  await resp.json()
+                        if "application/json" in content_type:
+                            response = await resp.json()
                         else:
                             with tqdm.external_write_mode():
-                                logger.debug (f"server_response = {resp.text()}")
-                        
+                                logger.debug(f"server_response = {resp.text()}")
+
                         if response.get("success"):
                             chunk_index += 1
                             dzchunkbyteoffset += self.chunk_size
@@ -208,7 +209,7 @@ class BunkrrAPI:
                             unit_divisor=1024,
                             miniters=1,
                             desc=f"{file.name} [{retries + 1}/{self.retries}]",
-                            leave = False
+                            leave=False,
                         ) as t:
                             with ProgressFileReader(filename=file, read_callback=t.update_to) as file_data:
                                 if file_size <= self.chunk_size:
@@ -247,43 +248,47 @@ class BunkrrAPI:
                                     while True:
                                         try:
                                             with tqdm.external_write_mode():
-                                                async with session.post("/api/upload/finishchunks", json=upload_data) as resp:
+                                                async with session.post(
+                                                    "/api/upload/finishchunks", json=upload_data
+                                                ) as resp:
                                                     response = {}
-                                                    content_type = resp.headers.get('Content-Type', '')
+                                                    content_type = resp.headers.get("Content-Type", "")
 
-                                                    if 'application/json' in content_type:
-                                                        response =  await resp.json()
+                                                    if "application/json" in content_type:
+                                                        response = await resp.json()
                                                     else:
-                                                        
-                                                        logger.debug (f"server_response = {resp.text()}")
+
+                                                        logger.debug(f"server_response = {resp.text()}")
 
                                                     if response.get("success") is False:
                                                         msg = f"{file_uuid} failed finishing chunks to {server} [{finish_chunks_attempt + 1}/{self.max_chunk_retries}]\n{pformat(response)}"
-                                                        
-                                                        logger.error(msg)
-                                                        raise Exception(msg)
+                                                        raise aiohttp.ClientResponseError(msg)
                                                     # chunk_upload_success = True
                                                     response.update(metadata)
                                                     return response
-                                        except Exception:
+                                        except aiohttp.ClientResponseError as e:
+                                            logger.error(e)
                                             finish_chunks_attempt += 1
                                             if finish_chunks_attempt >= self.max_chunk_retries:
-                                                raise
+                                                msg = (
+                                                    f"Upload failed for {file.name} to {server} Attempt #{retries + 1}"
+                                                )
+                                                raise aiohttp.ClientResponseError(msg)
                                     # TODO: Should probably return here
-                except Exception as e:
+                except aiohttp.ClientResponseError as e:
                     with tqdm.external_write_mode():
-                        logger.error(f"Upload failed for {file.name} to {server} Attempt #{retries + 1}")
-                        logger.exception(e)
+                        logger.error(e)
+                        logger.debug(e, exc_info=True)
                     retries += 1
 
             return {"success": False, "files": [{"name": file.name, "url": ""}]}
 
     # TODO: This should probably move out of API
     async def upload_files(self, paths: list[Path], folder_id: Optional[str] = None) -> list[UploadResponse]:
-        
+
         try:
             tasks = [self.upload(test_file, folder_id) for i, test_file in enumerate(paths)]
-            responses = await tqdm_asyncio.gather(*tasks, desc="Files uploaded", position = 0, leave = False)
+            responses = await tqdm_asyncio.gather(*tasks, desc="Files uploaded", position=0, leave=False)
             return responses
         finally:
             # This should happen in the API client itself

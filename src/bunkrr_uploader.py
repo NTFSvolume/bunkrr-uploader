@@ -1,13 +1,15 @@
-from bunkrr_uploader import main
 import logging
+
+from bunkrr_uploader import main
+
 logger = logging.getLogger(__name__)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
         exit(0)
     except KeyboardInterrupt:
-        print ()
+        print()
         logger.warning("Script stopped by user")
         exit(0)
     except Exception:

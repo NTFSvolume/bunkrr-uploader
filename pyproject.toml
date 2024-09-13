@@ -48,7 +48,7 @@ classifiers = [
 dependencies = [
   "aiohttp",
   "tqdm",
-  "rich",
+  "rich"
 ]
 
 [project.urls]
