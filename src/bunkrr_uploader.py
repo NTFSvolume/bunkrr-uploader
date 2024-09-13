@@ -7,6 +7,7 @@ if __name__ == '__main__':
         main()
         exit(0)
     except KeyboardInterrupt:
+        print ()
         logger.warning("Script stopped by user")
         exit(0)
     except Exception:

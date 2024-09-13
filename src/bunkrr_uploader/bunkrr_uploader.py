@@ -99,7 +99,7 @@ class BunkrrUploader:
             paths = [path]
         else:
             logger.warning (F"'{path}' is a folder, only files at the root will be uploaded (no recursion)")
-            paths = sorted([x for x in path.iterdir() if x.is_file()])
+            paths = sorted([x for x in path.iterdir() if x.is_file()], key=lambda p: str(p))
             if folder is None:
                 folder = path.name
 

@@ -29,9 +29,10 @@ USE_MAIN_NAME = LogFileConfig(2)
 
 def setup_logger(*,
         log_file: LogFileConfig | Path | str = NO_LOG_FILE ,
-        log_level = logging.DEBUG, 
+        log_level: int = logging.DEBUG, 
         logs_folder_overrride: Path | str = None,
-        datetime_as_suffix : bool = True
+        datetime_as_suffix : bool = True,
+        rich_console_handler: bool = True
         ) -> None:
     
     urllib3_logger = logging.getLogger("urllib3")
@@ -39,8 +40,9 @@ def setup_logger(*,
 
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    console_handler = RichHandler(**RICH_HANDLER_CONFIG, level = log_level, console = RICH_CONSOLE )
-    logger.addHandler(console_handler)
+    if rich_console_handler:
+        console_handler = RichHandler(**RICH_HANDLER_CONFIG, level = log_level, console = RICH_CONSOLE )
+        logger.addHandler(console_handler)
 
     main = Path(__main__.__file__)
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
