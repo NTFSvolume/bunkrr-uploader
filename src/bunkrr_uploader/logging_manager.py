@@ -20,24 +20,18 @@ RICH_CONSOLE = Console(theme=CONSOLE_THEME)
 
 RICH_HANDLER_CONFIG = {"show_time": False, "rich_tracebacks": True, "tracebacks_show_locals": False}
 
-
-class LogFileConfig(int):
-    def __init__(self, value):
-        self.value = value
-
-
-NO_LOG_FILE = LogFileConfig(0)
-USE_PROJECT_NAME = LogFileConfig(1)
-USE_MAIN_NAME = LogFileConfig(2)
+NO_LOG_FILE = 0
+USE_PROJECT_NAME = 1
+USE_MAIN_NAME = 2
 
 
 def setup_logger(
     *,
-    log_file: LogFileConfig | Path | str = NO_LOG_FILE,
+    log_file: int | Path | str = NO_LOG_FILE,
     log_level: int = logging.DEBUG,
     logs_folder_overrride: Path | str = None,
     datetime_as_suffix: bool = True,
-    rich_console_handler: bool = True,
+    use_rich_console: bool = True,
 ) -> None:
 
     urllib3_logger = logging.getLogger("urllib3")
@@ -45,7 +39,7 @@ def setup_logger(
 
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    if rich_console_handler:
+    if use_rich_console:
         console_handler = RichHandler(**RICH_HANDLER_CONFIG, level=log_level, console=RICH_CONSOLE)
         logger.addHandler(console_handler)
 
