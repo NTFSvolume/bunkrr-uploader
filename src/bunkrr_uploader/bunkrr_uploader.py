@@ -14,6 +14,8 @@ from .logging_manager import USE_MAIN_NAME, setup_logger
 
 logger = logging.getLogger(__name__)
 
+MAX_FILE_NAME_LENGHT = 240
+
 
 class BunkrrUploader:
     def __init__(
@@ -28,6 +30,7 @@ class BunkrrUploader:
         self.options = options
         self.api = BunkrrAPI(token, max_connections, retries, options)
         self.temporary_files = []
+        self.temp_dir = None
 
     async def init(self):
         raw_req = await self.api.get_check()
@@ -68,9 +71,6 @@ class BunkrrUploader:
     def prepare_file_for_upload(self, file: Path) -> List[Path]:
         file_size = file.stat().st_size
 
-        # TODO: Truncate the file name if it is too long
-        file_name = (file.name[:240] + "..") if len(file.name) > 240 else file.name
-
         if file.suffix in self.api.file_blacklist:
             logger.error(f"File {file} has blacklisted extension {file.suffix}")
             return []
@@ -80,21 +80,32 @@ class BunkrrUploader:
             logger.error(f"File {file} is bigger than max file size {self.api.max_file_size}")
             return []
 
+        # Truncate the file name if it is too long
+        # TODO: clean up temp DIR after upload finishes
+        if len(file.name) > MAX_FILE_NAME_LENGHT:
+            logger.warning(f"{file.name} truncated to {MAX_FILE_NAME_LENGHT} caracters")
+            if not self.tempdir:
+                self.temp_dir = Path(tempfile.mkdtemp())
+            truncate_to = MAX_FILE_NAME_LENGHT - len(file.suffix) - 3
+            file_name = file.name[:truncate_to] + "..." + file.suffix
+            temp_file = self.temp_dir / file_name
+            temp_file.symlink_to(file)
+            return [temp_file]
+
         return [file]
 
-    async def upload_files(self, path: Path, folder: Optional[str] = None) -> None:
+    async def upload_files(self, path: Path, album: Optional[str] = None) -> None:
         if path.is_file():
             paths = [path]
         else:
-            logger.warning(f"only files at the root of the input folder will be uploaded (no recursion)")
+            logger.warning(f"'{path}' is a folder, only files at the root will be uploaded (no recursion)")
             paths = sorted([x for x in path.iterdir() if x.is_file()], key=lambda p: str(p))
-            if folder is None:
-                folder = path.name
+            if album is None:
+                album = path.name
 
         if len(paths) == 0:
             logger.error("No file paths left to upload")
             return
-
         # The server may not accept certain file types and those over a certain size so we need to create temporary files
         filtered_paths = []
         for file_path in paths:
@@ -103,20 +114,20 @@ class BunkrrUploader:
         # TODO: Delete the extra created files after upload
         self.temporary_files = [x for x in filtered_paths if x not in paths]
 
-        folder_id = None
-        if folder:
+        album_id = None
+        if album:
             existing_folders = await self.api.get_albums()
-            existing_folder = next((x for x in existing_folders["albums"] if x["name"] == folder), None)
+            existing_folder = next((x for x in existing_folders["albums"] if x["name"] == album), None)
             if existing_folder:
-                folder_id = str(existing_folder["id"])
+                album_id = str(existing_folder["id"])
             else:
-                logger.debug(f"album '{folder}' does not exists, creating")
-                created_folder = await self.api.create_album(folder, folder)
-                folder_id = str(created_folder["id"])
-            logger.debug(f"album id: '{folder_id}'")
+                logger.debug(f"album '{album}' does not exists, creating")
+                created_album = await self.api.create_album(album, album)
+                album_id = str(created_album["id"])
+            logger.debug(f"album id: '{album_id}'")
 
         if paths:
-            responses = await self.api.upload_files(filtered_paths, folder_id)
+            responses = await self.api.upload_files(filtered_paths, album_id)
 
             if self.options.get("save") and responses:
                 expected_fieldnames = ["albumid", "filePathMD5", "fileNameMD5", "filePath", "fileName", "uploadSuccess"]
@@ -154,7 +165,7 @@ async def async_main() -> None:
         if args.dry_run:
             logger.warning("Dry run only, uploading skipped")
         else:
-            await bunkrr_client.upload_files(args.file, folder=args.folder)
+            await bunkrr_client.upload_files(args.file, album=args.folder)
     finally:
         if not bunkrr_client.api.session.closed:
             await bunkrr_client.api.session.close()

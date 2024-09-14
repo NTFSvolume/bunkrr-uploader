@@ -12,6 +12,7 @@ import aiohttp
 from tqdm import tqdm
 from tqdm.asyncio import tqdm_asyncio
 
+from .logging_manager import RICH_CONSOLE
 from .types import (
     AlbumsResponse,
     CheckResponse,
@@ -107,51 +108,63 @@ class BunkrrAPI:
             with tqdm.external_write_mode():
                 logger.debug(f"Processing chunk {chunk_index + 1}/{total_chunks} for {file_name}")
 
-            chunk_data = file_data.read(self.chunk_size)
-            chunk_upload_success = False
-            chunk_upload_attempt = 0
-            if not chunk_data:
-                print("No more chunks to upload")
-                break  # Exit the loop if we've reached the end of the file
+                chunk_data = file_data.read(self.chunk_size)
+                chunk_upload_success = False
+                chunk_upload_attempt = 0
 
-            # likely using https://gitlab.com/meno/dropzone/-/wikis/faq#chunked-uploads
-            # https://github.com/Dodotree/DropzonePHPchunks/issues/3
-            data = aiohttp.FormData()
-            data.add_field("dzuuid", file_uuid)
-            data.add_field("dzchunkindex", str(chunk_index))
-            data.add_field("dztotalfilesize", str(file_size))
-            data.add_field("dzchunksize", str(self.chunk_size))
-            data.add_field("dztotalchunkcount", str(total_chunks))
-            data.add_field("dzchunkbyteoffset", str(dzchunkbyteoffset))
-            data.add_field(
-                "files[]",
-                chunk_data,
-                filename=file_name,
-                content_type="application/octet-stream",
-            )
+                if not chunk_data:
+                    logger.debug("No more chunks to upload")
+                    break  # Exit the loop if we've reached the end of the file
 
             # Retries chunks if they ever fail
-            while chunk_upload_attempt < self.max_chunk_retries and chunk_upload_success is False:
+            while chunk_upload_attempt < self.max_chunk_retries and not chunk_upload_success:
                 try:
+                    # likely using https://gitlab.com/meno/dropzone/-/wikis/faq#chunked-uploads
+                    # https://github.com/Dodotree/DropzonePHPchunks/issues/3
+                    # FormData are one use only, so they need to be created every chunk retry
+                    data = aiohttp.FormData()
+                    data.add_field("dzuuid", file_uuid)
+                    data.add_field("dzchunkindex", str(chunk_index))
+                    data.add_field("dztotalfilesize", str(file_size))
+                    data.add_field("dzchunksize", str(self.chunk_size))
+                    data.add_field("dztotalchunkcount", str(total_chunks))
+                    data.add_field("dzchunkbyteoffset", str(dzchunkbyteoffset))
+                    data.add_field(
+                        "files[]",
+                        chunk_data,
+                        filename=file_name,
+                        content_type="application/octet-stream",
+                    )
                     async with session.post("/api/upload", data=data) as resp:
-                        response = await resp.json()
-                        if response.get("success"):
-                            chunk_index += 1
-                            dzchunkbyteoffset += self.chunk_size
-                            chunk_upload_success = True
-                        else:
-                            msg = f"{file_uuid} failed uploading chunk #{chunk_index}/{total_chunks} to {server} [{chunk_upload_attempt}/{self.max_chunk_retries}]"
+                        response = {}
+
+                        content_type = await resp.headers.get("Content-Type", "")
+
+                        if not "application/json" in content_type:
                             with tqdm.external_write_mode():
-                                logger.error(msg)
-                            raise Exception(msg)
+                                logger.debug(f"server_response = {await resp.text()}")
+                                raise aiohttp.ClientResponseError
+
+                        response = await resp.json()
+
+                        if not response.get("success"):
+                            with tqdm.external_write_mode():
+                                logger.debug(f"server response:\n {response}")
+                                raise aiohttp.ClientResponseError
+
+                        chunk_index += 1
+                        dzchunkbyteoffset += self.chunk_size
+                        chunk_upload_success = True
+
                 except Exception:
+                    msg = f"{file_uuid} failed uploading chunk #{chunk_index+1}/{total_chunks} to {server} [{chunk_upload_attempt+1}/{self.max_chunk_retries}]"
+                    with tqdm.external_write_mode():
+                        logger.error(msg)
                     chunk_upload_attempt += 1
 
-            if chunk_upload_success is False:
+            if not chunk_upload_success:
                 msg = f"Failed uploading chunks for {file_uuid} too many times to {server}, cannot continue"
-                with tqdm.external_write_mode():
-                    logger.error(msg)
-                raise Exception(msg)
+                raise aiohttp.client_exceptions.ClientConnectionError(msg)
 
     # TODO: This should probably move out of API
     async def upload(self, file: Path, album_id: Optional[str] = None) -> UploadResponse:
@@ -199,6 +212,7 @@ class BunkrrAPI:
                             unit_divisor=1024,
                             miniters=1,
                             desc=f"{file.name} [{retries + 1}/{self.retries}]",
+                            leave=False,
                         ) as t:
                             with ProgressFileReader(filename=file, read_callback=t.update_to) as file_data:
                                 if file_size <= self.chunk_size:
@@ -211,52 +225,72 @@ class BunkrrAPI:
                                     async with session.post("/api/upload", data=data, headers=headers) as resp:
                                         response = await resp.json()
                                         if not response.get("success"):
-                                            raise Exception(f"{file.name} failed uploading without chunks")
+                                            raise aiohttp.client_exceptions.ClientConnectionError(
+                                                f"{file.name} failed uploading without chunks"
+                                            )
 
+                                        with tqdm.external_write_mode():
+                                            logger.debug(f"{file.name} upload_succesfull\n{response}")
                                         return response
-                                else:
-                                    with tqdm.external_write_mode():
-                                        logger.debug(f"{file.name} will use UUID {file_uuid}")
-                                    await self.upload_chunks(
-                                        file_data, file.name, file_uuid, file_size, session, server
-                                    )
 
-                                    upload_data = {
-                                        "files": [
-                                            {
-                                                "uuid": file_uuid,
-                                                "original": file.name,
-                                                "type": file_mimetype,
-                                                "albumid": album_id or "",
-                                                "filelength": "",
-                                                "age": "",
-                                            }
-                                        ]
-                                    }
-                                    finish_chunks_attempt = 0
-                                    while True:
-                                        try:
+                                with tqdm.external_write_mode():
+                                    logger.debug(f"{file.name} will use UUID {file_uuid}")
+                                await self.upload_chunks(file_data, file.name, file_uuid, file_size, session, server)
+
+                                upload_data = {
+                                    "files": [
+                                        {
+                                            "uuid": file_uuid,
+                                            "original": file.name,
+                                            "type": file_mimetype,
+                                            "albumid": album_id or "",
+                                            "filelength": "",
+                                            "age": "",
+                                        }
+                                    ]
+                                }
+                                finish_chunks_attempt = 0
+                                while finish_chunks_attempt < self.max_chunk_retries:
+                                    try:
+                                        with tqdm.external_write_mode():
                                             async with session.post(
                                                 "/api/upload/finishchunks", json=upload_data
                                             ) as resp:
-                                                response = await resp.json()
-                                                if response.get("success") is False:
-                                                    msg = f"{file_uuid} failed finishing chunks to {server} [{finish_chunks_attempt + 1}/{self.max_chunk_retries}]\n{pformat(response)}"
+                                                response = {}
+                                                content_type = await resp.headers.get("Content-Type", "")
+
+                                                if not "application/json" in content_type:
                                                     with tqdm.external_write_mode():
-                                                        logger.error(msg)
-                                                    raise Exception(msg)
+                                                        logger.debug(f"server_response = {await resp.text()}")
+                                                        raise aiohttp.ClientResponseError
+
+                                                response = await resp.json()
+
+                                                if not response.get("success"):
+                                                    with tqdm.external_write_mode():
+                                                        logger.debug(f"server response:\n {response}")
+
+                                                    msg = f"{file_uuid} failed finishing chunks to {server} [{finish_chunks_attempt + 1}/{self.max_chunk_retries}]\n{pformat(response)}"
+                                                    raise aiohttp.ClientResponseError(msg)
                                                 # chunk_upload_success = True
                                                 response.update(metadata)
+                                                with tqdm.external_write_mode():
+                                                    logger.debug(f"{file.name} upload_succesfull\n{response}")
                                                 return response
-                                        except Exception:
-                                            finish_chunks_attempt += 1
-                                            if finish_chunks_attempt >= self.max_chunk_retries:
-                                                raise
-                                    # TODO: Should probably return here
-                except Exception:
+
+                                    except Exception as e:
+                                        logger.error(e)
+                                        finish_chunks_attempt += 1
+
+                                msg = f"Upload failed for {file.name} to {server} Attempt #{retries + 1}"
+                                raise aiohttp.ClientPayloadError(msg)
+                                # TODO: Should probably return here
+                except Exception as e:
                     with tqdm.external_write_mode():
-                        logger.exception(f"Upload failed for {file.name} to {server} Attempt #{retries + 1}")
+                        logger.error(e)
+                        # logger.debug(e, exc_info=True)
                     retries += 1
+
             return {"success": False, "files": [{"name": file.name, "url": ""}]}
 
     # TODO: This should probably move out of API

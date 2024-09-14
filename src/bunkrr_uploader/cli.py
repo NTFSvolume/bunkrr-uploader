@@ -16,11 +16,16 @@ def cli():
                 You can also set the BUNKRR_TOKEN environment variable for this""",
     )
     parser.add_argument(
-        "-f", "--folder", type=str, help="Folder to upload files to overriding the directory name if used"
+        "-a",
+        "--album",
+        metavar="ALBUM_NAME",
+        type=str,
+        help="""album where files will be uploaded to. Will be created if it does not already exist. 
+                If input is a DIR, defaults to DIR's name""",
     )
     parser.add_argument("-d", "--dry-run", action="store_true", help="Don't create albums or upload files")
     parser.add_argument(
-        "--max-chunk-size",
+        "--use-max-chunk-size",
         action="store_true",
         help="Use the server's maximum chunk size instead of the default one",
     )
